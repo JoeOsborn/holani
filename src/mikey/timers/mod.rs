@@ -1,15 +1,30 @@
 pub mod audio_channel_timer;
 pub mod base_timer;
 
-use core::num::{NonZero, NonZeroU8};
+use crate::mikey::*;
+use crate::CRYSTAL_TICK_LENGTH;
 use audio_channel_timer::AudioChannelTimer;
 use base_timer::BaseTimer;
+use core::num::NonZeroU8;
+use core::num::{NonZero, NonZeroU8};
 use log::trace;
-use crate::mikey::*;
 
 const TIMER_TICKS_COUNT: u16 = (0.000001 / CRYSTAL_TICK_LENGTH) as u16; // 1us/62.5ns
 
-const TIMER_LINKS: [Option<NonZeroU8>; 12] = [Some(NonZero::new(2).unwrap()), Some(NonZero::new(3).unwrap()), Some(NonZero::new(4).unwrap()), Some(NonZero::new(5).unwrap()), None, Some(NonZero::new(7).unwrap()), None, Some(NonZero::new(8).unwrap()), Some(NonZero::new(9).unwrap()), Some(NonZero::new(10).unwrap()), Some(NonZero::new(11).unwrap()), Some(NonZero::new(1).unwrap())];
+const TIMER_LINKS: [Option<NonZeroU8>; 12] = [
+    NonZeroU8::new(2),
+    NonZeroU8::new(3),
+    NonZeroU8::new(4),
+    NonZeroU8::new(5),
+    None,
+    NonZeroU8::new(7),
+    None,
+    NonZeroU8::new(8),
+    NonZeroU8::new(9),
+    NonZeroU8::new(10),
+    NonZeroU8::new(11),
+    NonZeroU8::new(1),
+];
 const TIMER_COUNT: u8 = 12;
 
 const CTRLA_INTERRUPT_BIT: u8 = 0b10000000;
@@ -40,7 +55,7 @@ pub enum TimerReg {
     Volume,
     Feedback,
     Output,
-    ShiftRegister,    
+    ShiftRegister,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -84,20 +99,19 @@ macro_rules! tick_timer {
 
 impl Timers {
     pub fn new() -> Self {
-       
         Self {
             timers: [
-                TimerType::Base(BaseTimer::new(0, TIMER_LINKS[0])), 
-                TimerType::Base(BaseTimer::new(1, TIMER_LINKS[1])), 
-                TimerType::Base(BaseTimer::new(2, TIMER_LINKS[2])), 
-                TimerType::Base(BaseTimer::new(3, TIMER_LINKS[3])), 
-                TimerType::Base(BaseTimer::new(4, TIMER_LINKS[4])), 
-                TimerType::Base(BaseTimer::new(5, TIMER_LINKS[5])), 
-                TimerType::Base(BaseTimer::new(6, TIMER_LINKS[6])), 
+                TimerType::Base(BaseTimer::new(0, TIMER_LINKS[0])),
+                TimerType::Base(BaseTimer::new(1, TIMER_LINKS[1])),
+                TimerType::Base(BaseTimer::new(2, TIMER_LINKS[2])),
+                TimerType::Base(BaseTimer::new(3, TIMER_LINKS[3])),
+                TimerType::Base(BaseTimer::new(4, TIMER_LINKS[4])),
+                TimerType::Base(BaseTimer::new(5, TIMER_LINKS[5])),
+                TimerType::Base(BaseTimer::new(6, TIMER_LINKS[6])),
                 TimerType::Base(BaseTimer::new(7, TIMER_LINKS[7])),
-                TimerType::Audio(AudioChannelTimer::new(8, TIMER_LINKS[8])), 
-                TimerType::Audio(AudioChannelTimer::new(9, TIMER_LINKS[9])), 
-                TimerType::Audio(AudioChannelTimer::new(10, TIMER_LINKS[10])), 
+                TimerType::Audio(AudioChannelTimer::new(8, TIMER_LINKS[8])),
+                TimerType::Audio(AudioChannelTimer::new(9, TIMER_LINKS[9])),
+                TimerType::Audio(AudioChannelTimer::new(10, TIMER_LINKS[10])),
                 TimerType::Audio(AudioChannelTimer::new(11, TIMER_LINKS[11])),
             ],
             timer_triggers: [0; 12],
@@ -122,7 +136,7 @@ impl Timers {
                 }
                 false
             }
-            _ => panic!()
+            _ => panic!(),
         }
     }
 
@@ -135,11 +149,12 @@ impl Timers {
                 }
                 false
             }
-            _ => panic!()
+            _ => panic!(),
         }
     }
 
-    pub fn tick_all(&mut self, current_tick: u64) -> (u8, bool) { // bool: Timer 4 has a special treatment, triggered information without interrupt
+    pub fn tick_all(&mut self, current_tick: u64) -> (u8, bool) {
+        // bool: Timer 4 has a special treatment, triggered information without interrupt
         let mut int = 0;
         let mut int4_triggered: bool = false;
 
@@ -152,7 +167,7 @@ impl Timers {
             int |= match &mut self.timers[id] {
                 TimerType::Base(t) => tick_timer!(self, t),
                 TimerType::Audio(t) => tick_timer!(self, t),
-            };  
+            };
             self.update_timer_trigger_tick(id);
             if id == 4 {
                 int4_triggered = true;
@@ -163,19 +178,19 @@ impl Timers {
     }
 
     fn get_timer(&self, addr: u16) -> (usize, TimerReg) {
-        if addr < AUD0VOL { 
+        if addr < AUD0VOL {
             (
-                ((addr - MIK_ADDR) / 4) as usize, 
-                match addr % 4 { 
+                ((addr - MIK_ADDR) / 4) as usize,
+                match addr % 4 {
                     0 => TimerReg::Backup,
                     1 => TimerReg::ControlA,
                     2 => TimerReg::Count,
                     3 => TimerReg::ControlB,
-                    _ => unreachable!()
-                }
+                    _ => unreachable!(),
+                },
             )
         } else {
-            ( 
+            (
                 (((addr - AUD0VOL) / 8) + 8) as usize,
                 match addr % 8 {
                     0 => TimerReg::Volume,
@@ -186,8 +201,8 @@ impl Timers {
                     5 => TimerReg::ControlA,
                     6 => TimerReg::Count,
                     7 => TimerReg::ControlB,
-                    _ => unreachable!()
-                }
+                    _ => unreachable!(),
+                },
             )
         }
     }
@@ -229,29 +244,29 @@ impl Timers {
                 TimerReg::ControlA => {
                     t.set_control_a(v, self.ticks);
                     self.update_timer_trigger_tick(index);
-                },
+                }
                 TimerReg::Count => {
                     t.set_count(v, self.ticks);
                     self.update_timer_trigger_tick(index);
-                },
+                }
                 TimerReg::ControlB => t.set_control_b(v),
-                _ => unreachable!(), 
+                _ => unreachable!(),
             },
             TimerType::Audio(t) => match cmd {
                 TimerReg::Backup => t.set_backup(v),
                 TimerReg::ControlA => {
                     t.set_control_a(v, self.ticks);
                     self.update_timer_trigger_tick(index);
-                },
+                }
                 TimerReg::Count => {
                     t.set_count(v, self.ticks);
                     self.update_timer_trigger_tick(index);
-                },
+                }
                 TimerReg::ControlB => t.set_control_b(v),
                 TimerReg::Volume => t.set_volume(v),
                 TimerReg::Feedback => t.set_feedback(v),
                 TimerReg::Output => t.set_output(v as i8),
-                TimerReg::ShiftRegister => t.set_shift_register(v), 
+                TimerReg::ShiftRegister => t.set_shift_register(v),
             },
         }
     }
@@ -277,7 +292,7 @@ impl Timers {
     pub fn audio_out(&self, n: usize) -> i16 {
         match &self.timers[n] {
             TimerType::Audio(t) => t.output() as i16,
-            _ => 0
+            _ => 0,
         }
     }
 }

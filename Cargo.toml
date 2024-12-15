@@ -17,3 +17,6 @@ parking_lot = "0.12"
 
 [features]
 comlynx_shared_memory = ["dep:shared_memory"]
+
+[profile.release]
+debug = 1
