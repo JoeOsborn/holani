@@ -65,38 +65,6 @@ pub struct Timers {
     ticks: u64,
 }
 
-macro_rules! tick_linked_timer {
-    ($self: ident, $t: ident) => {{
-        let (triggered, i) = $t.tick_linked();
-        if !triggered {
-            0
-        } else {
-            let mut int = i;
-            match $t.linked_timer() {
-                Some(id) => int |= $self.tick_linked_timer(id),
-                _ => (),
-            }
-            int
-        }
-    }};
-}
-
-macro_rules! tick_timer {
-    ($self: ident, $t: ident) => {{
-        let (triggered, i) = $t.tick($self.ticks);
-        if !triggered {
-            0
-        } else {
-            let mut int = i;
-            match $t.linked_timer() {
-                Some(id) => int |= $self.tick_linked_timer(id),
-                _ => (),
-            }
-            int
-        }
-    }};
-}
-
 impl Timers {
     pub fn new() -> Self {
         Self {
@@ -120,10 +88,26 @@ impl Timers {
     }
 
     #[inline(always)]
-    fn tick_linked_timer(&mut self, timer_id: NonZeroU8) -> u8 {
-        match &mut self.timers[timer_id.get() as usize] {
-            TimerType::Base(t) => tick_linked_timer!(self, t),
-            TimerType::Audio(t) => tick_linked_timer!(self, t),
+    fn tick_linked_timer(timers: &mut [TimerType], timer_id: NonZeroU8) -> u8 {
+        match &mut timers[timer_id.get() as usize] {
+            TimerType::Base(t) => {
+                let (triggered, i) = t.tick_linked();
+                if !triggered {
+                    0
+                } else {
+                    t.linked_timer()
+                        .map_or(i, |id| i | Self::tick_linked_timer(timers, id))
+                }
+            }
+            TimerType::Audio(t) => {
+                let (triggered, i) = t.tick_linked();
+                if !triggered {
+                    0
+                } else {
+                    t.linked_timer()
+                        .map_or(i, |id| i | Self::tick_linked_timer(timers, id))
+                }
+            }
         }
     }
 
@@ -165,8 +149,24 @@ impl Timers {
                 continue;
             }
             int |= match &mut self.timers[id] {
-                TimerType::Base(t) => tick_timer!(self, t),
-                TimerType::Audio(t) => tick_timer!(self, t),
+                TimerType::Base(t) => {
+                    let (triggered, i) = t.tick(self.ticks);
+                    if !triggered {
+                        0
+                    } else {
+                        t.linked_timer()
+                            .map_or(i, |id| i | Timers::tick_linked_timer(&mut self.timers, id))
+                    }
+                }
+                TimerType::Audio(t) => {
+                    let (triggered, i) = t.tick(self.ticks);
+                    if !triggered {
+                        0
+                    } else {
+                        t.linked_timer()
+                            .map_or(i, |id| i | Timers::tick_linked_timer(&mut self.timers, id))
+                    }
+                }
             };
             self.update_timer_trigger_tick(id);
             if id == 4 {
