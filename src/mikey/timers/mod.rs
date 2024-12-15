@@ -61,7 +61,7 @@ pub enum TimerReg {
 pub struct Timers {
     timers: [TimerType; TIMER_COUNT as usize],
     timers_triggered: [bool; 8],
-    //    audio_settings: [audio_channel_timer::AudioSettings; 4],
+    audio_settings: [audio_channel_timer::AudioSettings; 4],
     timer_triggers: [u64; TIMER_COUNT as usize],
     ticks: u64,
 }
@@ -84,6 +84,7 @@ impl Timers {
                 TimerType::Audio(AudioChannelTimer::new(11, TIMER_LINKS[11])),
             ],
             timer_triggers: [0; 12],
+            audio_settings: [audio_channel_timer::AudioSettings::default(); 4],
             timers_triggered: [false; 8],
             ticks: 0,
         }
@@ -93,6 +94,7 @@ impl Timers {
     fn tick_linked_timer(
         timers: &mut [TimerType],
         timers_triggered: &mut [bool],
+        audio_settings: &mut [audio_channel_timer::AudioSettings],
         timer_id: NonZeroU8,
     ) -> u8 {
         let timer_id = timer_id.get() as usize;
@@ -103,17 +105,17 @@ impl Timers {
                     0
                 } else {
                     t.linked_timer().map_or(i, |id| {
-                        i | Self::tick_linked_timer(timers, timers_triggered, id)
+                        i | Self::tick_linked_timer(timers, timers_triggered, audio_settings, id)
                     })
                 }
             }
             TimerType::Audio(t) => {
-                let (triggered, i) = t.tick_linked();
+                let (triggered, i) = t.tick_linked(&mut audio_settings[timer_id - 8]);
                 if !triggered {
                     0
                 } else {
                     t.linked_timer().map_or(i, |id| {
-                        i | Self::tick_linked_timer(timers, timers_triggered, id)
+                        i | Self::tick_linked_timer(timers, timers_triggered, audio_settings, id)
                     })
                 }
             }
@@ -157,6 +159,7 @@ impl Timers {
                             i | Timers::tick_linked_timer(
                                 &mut self.timers,
                                 &mut self.timers_triggered,
+                                &mut self.audio_settings,
                                 id,
                             )
                         })
@@ -180,7 +183,7 @@ impl Timers {
                     unreachable!();
                 }
                 TimerType::Audio(t) => {
-                    let (triggered, i) = t.tick(self.ticks);
+                    let (triggered, i) = t.tick(self.ticks, &mut self.audio_settings[id - 8]);
                     if !triggered {
                         0
                     } else {
@@ -188,6 +191,7 @@ impl Timers {
                             i | Timers::tick_linked_timer(
                                 &mut self.timers,
                                 &mut self.timers_triggered,
+                                &mut self.audio_settings,
                                 id,
                             )
                         })
@@ -245,16 +249,19 @@ impl Timers {
                 TimerReg::ControlB => t.control_b(),
                 _ => unreachable!(),
             },
-            TimerType::Audio(t) => match cmd {
-                TimerReg::Backup => t.backup(),
-                TimerReg::ControlA => t.control_a(),
-                TimerReg::Count => t.count(),
-                TimerReg::ControlB => t.control_b(),
-                TimerReg::Volume => t.volume(),
-                TimerReg::Feedback => t.feedback(),
-                TimerReg::Output => t.output() as u8,
-                TimerReg::ShiftRegister => t.shift_register(),
-            },
+            TimerType::Audio(t) => {
+                let settings = &self.audio_settings[index - 8];
+                match cmd {
+                    TimerReg::Backup => t.backup(),
+                    TimerReg::ControlA => t.control_a(),
+                    TimerReg::Count => t.count(),
+                    TimerReg::ControlB => t.control_b(),
+                    TimerReg::Volume => settings.volume,
+                    TimerReg::Feedback => settings.feedback,
+                    TimerReg::Output => settings.output as u8,
+                    TimerReg::ShiftRegister => settings.shift_register,
+                }
+            }
         }
     }
 
@@ -275,22 +282,31 @@ impl Timers {
                 TimerReg::ControlB => t.set_control_b(v),
                 _ => unreachable!(),
             },
-            TimerType::Audio(t) => match cmd {
-                TimerReg::Backup => t.set_backup(v),
-                TimerReg::ControlA => {
-                    t.set_control_a(v, self.ticks);
-                    self.update_timer_trigger_tick(index);
+            TimerType::Audio(t) => {
+                let settings = &mut self.audio_settings[index];
+                match cmd {
+                    TimerReg::Backup => {
+                        t.set_backup(v);
+                        settings.disabled = t.backup() == 0 && settings.feedback == 1;
+                    }
+                    TimerReg::ControlA => {
+                        t.set_control_a(v, self.ticks);
+                        self.update_timer_trigger_tick(index);
+                    }
+                    TimerReg::Count => {
+                        t.set_count(v, self.ticks);
+                        self.update_timer_trigger_tick(index);
+                    }
+                    TimerReg::ControlB => t.set_control_b(v),
+                    TimerReg::Volume => settings.volume = v,
+                    TimerReg::Feedback => {
+                        settings.feedback = v;
+                        settings.disabled = t.backup() == 0 && settings.feedback == 1;
+                    }
+                    TimerReg::Output => settings.output = v as i8,
+                    TimerReg::ShiftRegister => settings.shift_register = v,
                 }
-                TimerReg::Count => {
-                    t.set_count(v, self.ticks);
-                    self.update_timer_trigger_tick(index);
-                }
-                TimerReg::ControlB => t.set_control_b(v),
-                TimerReg::Volume => t.set_volume(v),
-                TimerReg::Feedback => t.set_feedback(v),
-                TimerReg::Output => t.set_output(v as i8),
-                TimerReg::ShiftRegister => t.set_shift_register(v),
-            },
+            }
         }
     }
 
@@ -313,9 +329,10 @@ impl Timers {
 
     #[inline(always)]
     pub fn audio_out(&self, n: usize) -> i16 {
-        match &self.timers[n] {
-            TimerType::Audio(t) => t.output() as i16,
-            _ => 0,
+        if n >= 8 {
+            self.audio_settings[n - 8].output as i16
+        } else {
+            0
         }
     }
 }
