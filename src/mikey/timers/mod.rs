@@ -1,12 +1,11 @@
 pub mod audio_channel_timer;
 pub mod base_timer;
 
+use crate::consts::CRYSTAL_TICK_LENGTH;
 use crate::mikey::*;
-use crate::CRYSTAL_TICK_LENGTH;
 use audio_channel_timer::AudioChannelTimer;
 use base_timer::BaseTimer;
 use core::num::NonZeroU8;
-use core::num::{NonZero, NonZeroU8};
 use log::trace;
 
 const TIMER_TICKS_COUNT: u16 = (0.000001 / CRYSTAL_TICK_LENGTH) as u16; // 1us/62.5ns
@@ -61,6 +60,8 @@ pub enum TimerReg {
 #[derive(Serialize, Deserialize)]
 pub struct Timers {
     timers: [TimerType; TIMER_COUNT as usize],
+    timers_triggered: [bool; 8],
+    //    audio_settings: [audio_channel_timer::AudioSettings; 4],
     timer_triggers: [u64; TIMER_COUNT as usize],
     ticks: u64,
 }
@@ -83,20 +84,27 @@ impl Timers {
                 TimerType::Audio(AudioChannelTimer::new(11, TIMER_LINKS[11])),
             ],
             timer_triggers: [0; 12],
+            timers_triggered: [false; 8],
             ticks: 0,
         }
     }
 
     #[inline(always)]
-    fn tick_linked_timer(timers: &mut [TimerType], timer_id: NonZeroU8) -> u8 {
-        match &mut timers[timer_id.get() as usize] {
+    fn tick_linked_timer(
+        timers: &mut [TimerType],
+        timers_triggered: &mut [bool],
+        timer_id: NonZeroU8,
+    ) -> u8 {
+        let timer_id = timer_id.get() as usize;
+        match &mut timers[timer_id] {
             TimerType::Base(t) => {
-                let (triggered, i) = t.tick_linked();
+                let (triggered, i) = t.tick_linked(&mut timers_triggered[timer_id]);
                 if !triggered {
                     0
                 } else {
-                    t.linked_timer()
-                        .map_or(i, |id| i | Self::tick_linked_timer(timers, id))
+                    t.linked_timer().map_or(i, |id| {
+                        i | Self::tick_linked_timer(timers, timers_triggered, id)
+                    })
                 }
             }
             TimerType::Audio(t) => {
@@ -104,37 +112,28 @@ impl Timers {
                 if !triggered {
                     0
                 } else {
-                    t.linked_timer()
-                        .map_or(i, |id| i | Self::tick_linked_timer(timers, id))
+                    t.linked_timer().map_or(i, |id| {
+                        i | Self::tick_linked_timer(timers, timers_triggered, id)
+                    })
                 }
             }
         }
     }
 
     pub fn vsync(&mut self) -> bool {
-        match &mut self.timers[2] {
-            TimerType::Base(t) => {
-                if t.triggered() {
-                    t.reset_triggered();
-                    return true;
-                }
-                false
-            }
-            _ => panic!(),
+        if self.timers_triggered[2] {
+            self.timers_triggered[2] = false;
+            return true;
         }
+        false
     }
 
     pub fn hsync(&mut self) -> bool {
-        match &mut self.timers[0] {
-            TimerType::Base(t) => {
-                if t.triggered() {
-                    t.reset_triggered();
-                    return true;
-                }
-                false
-            }
-            _ => panic!(),
+        if self.timers_triggered[0] {
+            self.timers_triggered[0] = false;
+            return true;
         }
+        false
     }
 
     pub fn tick_all(&mut self, current_tick: u64) -> (u8, bool) {
@@ -144,34 +143,58 @@ impl Timers {
 
         self.ticks = current_tick;
 
-        for id in 0..TIMER_COUNT as usize {
+        for id in 0..8 {
             if self.timer_triggers[id] > self.ticks {
                 continue;
             }
             int |= match &mut self.timers[id] {
                 TimerType::Base(t) => {
-                    let (triggered, i) = t.tick(self.ticks);
+                    let (triggered, i) = t.tick(self.ticks, &mut self.timers_triggered[id]);
                     if !triggered {
                         0
                     } else {
-                        t.linked_timer()
-                            .map_or(i, |id| i | Timers::tick_linked_timer(&mut self.timers, id))
+                        t.linked_timer().map_or(i, |id| {
+                            i | Timers::tick_linked_timer(
+                                &mut self.timers,
+                                &mut self.timers_triggered,
+                                id,
+                            )
+                        })
                     }
                 }
-                TimerType::Audio(t) => {
-                    let (triggered, i) = t.tick(self.ticks);
-                    if !triggered {
-                        0
-                    } else {
-                        t.linked_timer()
-                            .map_or(i, |id| i | Timers::tick_linked_timer(&mut self.timers, id))
-                    }
+                TimerType::Audio(_) => {
+                    unreachable!();
                 }
             };
             self.update_timer_trigger_tick(id);
             if id == 4 {
                 int4_triggered = true;
             }
+        }
+        for id in 8..12 {
+            if self.timer_triggers[id] > self.ticks {
+                continue;
+            }
+            int |= match &mut self.timers[id] {
+                TimerType::Base(_) => {
+                    unreachable!();
+                }
+                TimerType::Audio(t) => {
+                    let (triggered, i) = t.tick(self.ticks);
+                    if !triggered {
+                        0
+                    } else {
+                        t.linked_timer().map_or(i, |id| {
+                            i | Timers::tick_linked_timer(
+                                &mut self.timers,
+                                &mut self.timers_triggered,
+                                id,
+                            )
+                        })
+                    }
+                }
+            };
+            self.update_timer_trigger_tick(id);
         }
 
         (int, int4_triggered)

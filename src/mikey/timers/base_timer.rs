@@ -14,7 +14,6 @@ pub struct BaseTimer {
     clock_ticks: Option<u32>,
     next_trigger_tick: u64,
     linked_timer: Option<NonZeroU8>,
-    triggered: bool,
     is_linked: bool,
     count_enabled: bool,
     reload_enabled: bool,
@@ -32,7 +31,6 @@ impl BaseTimer {
             clock_ticks: None,
             next_trigger_tick: u64::MAX,
             linked_timer,
-            triggered: false,
             is_linked: false,
             count_enabled: false,
             reload_enabled: false,
@@ -141,7 +139,7 @@ impl BaseTimer {
         self.is_linked
     }
 
-    fn count_down(&mut self) -> (bool, u8) {
+    fn count_down(&mut self, triggered: &mut bool) -> (bool, u8) {
         self.control_b &= !CTRLB_BORROW_OUT_BIT;
         self.control_b |= CTRLB_BORROW_IN_BIT;
         match self.count.cmp(&0) {
@@ -158,25 +156,25 @@ impl BaseTimer {
                 } else {
                     self.next_trigger_tick = u64::MAX;
                 }
-                return (true, self.done());
+                return (true, self.done(triggered));
             }
             _ => (),
         }
         (false, 0)
     }
 
-    pub fn tick_linked(&mut self) -> (bool, u8) {
+    pub fn tick_linked(&mut self, triggered: &mut bool) -> (bool, u8) {
         if !self.is_linked {
             return (false, 0);
         }
 
         if self.count_enabled {
-            return self.count_down();
+            return self.count_down(triggered);
         }
         (false, 0)
     }
 
-    pub fn tick(&mut self, current_tick: u64) -> (bool, u8) {
+    pub fn tick(&mut self, current_tick: u64, triggered: &mut bool) -> (bool, u8) {
         self.control_b &= !CTRLB_BORROW_IN_BIT;
 
         if !self.count_enabled {
@@ -186,27 +184,19 @@ impl BaseTimer {
 
         self.next_trigger_tick = current_tick + self.clock_ticks.unwrap() as u64;
 
-        self.count_down()
+        self.count_down(triggered)
     }
 
-    fn done(&mut self) -> u8 {
+    fn done(&mut self, triggered: &mut bool) -> u8 {
         trace!("Timer #{} done.", self.id);
         self.control_b |= CTRLB_TIMER_DONE_BIT | CTRLB_BORROW_OUT_BIT;
-        self.triggered = true;
+        *triggered = true;
 
         if self.interrupt_enabled() {
             return self.int;
         }
 
         0
-    }
-
-    pub fn triggered(&self) -> bool {
-        self.triggered
-    }
-
-    pub fn reset_triggered(&mut self) {
-        self.triggered = false;
     }
 
     pub fn next_trigger_tick(&self) -> u64 {
